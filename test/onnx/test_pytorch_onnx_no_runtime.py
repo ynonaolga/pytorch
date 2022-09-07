@@ -960,6 +960,41 @@ class TestQuantizeEagerONNXExport(common_utils.TestCase):
             )
 
         _export_to_onnx(model, data, input_names)
+    def test_col2im(self):
+        # This test can be moved to test/onnx/test_pytorch_onnx_onnxruntime.py when ORT implement ::Col2Im
+
+        # Random batched RGB 32x32 image-shaped input tensor of batch size 64
+        original_image_inputs = torch.randn((64, 3, 32, 32))
+        output_size = tuple(original_image_inputs.shape[2:])
+        kernel_size = (1, 2)
+        dilation = 3
+        padding = 2
+        stride = 1
+        model_im2col = torch.nn.Unfold(kernel_size,
+                                       dilation=dilation,
+                                       padding=padding,
+                                       stride=stride)
+        blocks = model_im2col(original_image_inputs)
+
+        model = torch.nn.Fold(output_size=output_size,
+                                     kernel_size=kernel_size,
+                                     dilation=dilation,
+                                     padding=padding,
+                                     stride=stride
+        )
+        f = io.BytesIO()
+        torch.onnx.export(model,
+                         (blocks,),
+                         f,
+                         opset_version=18)
+
+        onnx_model = onnx.load(io.BytesIO(f.getvalue()))
+        self.assertTrue(onnx_model.graph.node[-1].op_type == "Col2Im")
+        self.assertTrue(onnx_model.graph.node[-1].domain == "")
+        self.assertTrue(len(onnx_model.graph.node[-1].input) == 3)
+        self.assertTrue(onnx_model.graph.node[-1].attribute[0].name == "dilations")
+        self.assertTrue(onnx_model.graph.node[-1].attribute[1].name == "padding")
+        self.assertTrue(onnx_model.graph.node[-1].attribute[2].name == "strides")
 
     @common_quantization.skipIfNoFBGEMM
     @common_utils.skipIfNoCaffe2
