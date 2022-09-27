@@ -960,6 +960,7 @@ class TestQuantizeEagerONNXExport(common_utils.TestCase):
             )
 
         _export_to_onnx(model, data, input_names)
+
     def test_col2im(self):
         # This test can be moved to test/onnx/test_pytorch_onnx_onnxruntime.py when ORT implement ::Col2Im
 
@@ -990,7 +991,7 @@ class TestQuantizeEagerONNXExport(common_utils.TestCase):
         self.assertEqual(onnx_model.graph.node[-1].domain, "")
         self.assertEqual(len(onnx_model.graph.node[-1].input), 3)
         self.assertEqual(onnx_model.graph.node[-1].attribute[0].name, "dilations")
-        self.assertEqual(onnx_model.graph.node[-1].attribute[1].name, "padding")
+        self.assertEqual(onnx_model.graph.node[-1].attribute[1].name, "pads")
         self.assertEqual(onnx_model.graph.node[-1].attribute[2].name, "strides")
 
     @common_quantization.skipIfNoFBGEMM
