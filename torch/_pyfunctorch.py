@@ -19,6 +19,9 @@ class FunctorchInterpreter:
         finally:
             del guard
 
+    def level(self):
+        return self._cdata.level()
+
 
 class VmapInterpreter(FunctorchInterpreter):
     def __init__(self, cdata: CVmapInterpreterPtr):
@@ -28,10 +31,13 @@ class VmapInterpreter(FunctorchInterpreter):
         kernel = op.functorch_table[TransformType.Vmap]
         return kernel(self, *args, **kwargs)
 
+    def batch_size(self):
+        return self._cdata.batchSize()
+
 
 class GradInterpreter(FunctorchInterpreter):
     def __init__(self, cdata: CGradInterpreterPtr):
-        self.cdata = cdata
+        self._cdata = cdata
 
     def py_process(self, op, args, kwargs):
         kernel = op.functorch_table[TransformType.Grad]

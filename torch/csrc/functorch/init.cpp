@@ -388,6 +388,18 @@ static void dump_local_tls() {
   std::cout << "[Local Exclude] " << tls.excluded_ << std::endl;
 }
 
+static std::tuple<Tensor, optional<int64_t>> unwrapTensorAtCurrentLevel(const Tensor& tensor) {
+  auto level = currentLevel();
+  auto* batched = maybeGetBatchedImpl(tensor);
+  if (!batched) {
+    return std::make_tuple(tensor, nullopt);
+  }
+  if (batched->level() == level) {
+    return std::make_tuple(batched->value(), batched->bdim());
+  }
+  return std::make_tuple(tensor, nullopt);
+}
+
 void initFuncTorchBindings(PyObject* module) {
   auto _C = py::handle(module).cast<py::module>();
   auto m = _C.def_submodule("_functorch");
@@ -444,6 +456,7 @@ void initFuncTorchBindings(PyObject* module) {
   m.def("reshape_dim_into", &at::functorch::reshape_dim_into);
   m.def("reshape_dim_outof", &at::functorch::reshape_dim_outof);
   m.def("are_transforms_active", &at::functorch::areTransformsActive);
+  m.def("unwrap_batchedtensor", unwrapTensorAtCurrentLevel);
   // various debugging things. Maybe we should offer these as first-class APIs
   // on Tensors?
   m.def("is_batchedtensor", &is_batchedtensor);
