@@ -612,15 +612,6 @@ def sanitize_test_filename(filename):
     strip_py = re.sub(r'.py$', '', filename)
     return re.sub('/', r'.', strip_py)
 
-# hack until https://github.com/pytorch/pytorch/issues/82109 is resolved
-def sanitize_if_functorch_test_filename(filename):
-    # absolute filenames must be converted to relative paths, otherwise,
-    # we cannot prepend test-reports/ to it
-    # (e.g. test-reports\\C:\\... on windows is nonsense)
-    if filename.startswith(CI_FUNCTORCH_ROOT):
-        filename = filename[len(CI_PT_ROOT) + 1:]
-    return filename
-
 def lint_test_case_extension(suite):
     succeed = True
     for test_case_or_suite in suite:
@@ -640,10 +631,8 @@ def lint_test_case_extension(suite):
     return succeed
 
 
-def get_report_path(pytest=False):
-    test_filename = inspect.getfile(sys._getframe(2))
-    test_filename = sanitize_if_functorch_test_filename(test_filename)
-    test_filename = sanitize_test_filename(test_filename)
+def get_report_path(argv=UNITTEST_ARGS, pytest=False):
+    test_filename = sanitize_test_filename(argv[0])
     test_report_path = TEST_SAVE_XML + LOG_SUFFIX
     test_report_path = os.path.join(test_report_path, test_filename)
     if pytest:
@@ -875,6 +864,8 @@ TEST_DILL = _check_module_exists('dill')
 
 TEST_LIBROSA = _check_module_exists('librosa') and not IS_ARM64
 
+TEST_OPT_EINSUM = _check_module_exists('opt_einsum')
+
 BUILD_WITH_CAFFE2 = torch.onnx._CAFFE2_ATEN_FALLBACK
 
 # Python 2.7 doesn't have spawn
@@ -908,7 +899,7 @@ TEST_WITH_CROSSREF = os.getenv('PYTORCH_TEST_WITH_CROSSREF', '0') == '1'
 
 
 if TEST_CUDA and 'NUM_PARALLEL_PROCS' in os.environ:
-    num_procs = int(os.getenv("NUM_PARALLEL_PROCS", "3"))
+    num_procs = int(os.getenv("NUM_PARALLEL_PROCS", "2"))
     # other libraries take up about 11% of space per process
     torch.cuda.set_per_process_memory_fraction(round(1 / num_procs - .11, 2))
 
@@ -933,14 +924,17 @@ TEST_WITH_TORCHINDUCTOR = os.getenv('PYTORCH_TEST_WITH_INDUCTOR') == '1'
 TEST_WITH_TORCHDYNAMO = os.getenv('PYTORCH_TEST_WITH_DYNAMO') == '1' or TEST_WITH_TORCHINDUCTOR
 
 if TEST_WITH_TORCHDYNAMO:
-    import torchdynamo
+    import torch._dynamo
     import logging
-    torchdynamo.config.log_level = logging.ERROR
+    torch._dynamo.config.log_level = logging.ERROR
     # Do not spend time on helper functions that are called with different inputs
-    torchdynamo.config.cache_size_limit = 8
+    torch._dynamo.config.cache_size_limit = 8
+    # TODO: Remove this; this is grandfathered in because we suppressed errors
+    # on test suite previously
+    torch._dynamo.config.suppress_errors = True
 
 
-def skipIfTorchDynamo(msg="test doesn't currently work with torchdynamo"):
+def skipIfTorchDynamo(msg="test doesn't currently work with dynamo"):
     def decorator(fn):
         if not isinstance(fn, type):
             @wraps(fn)
@@ -1672,8 +1666,23 @@ def check_if_enable(test: unittest.TestCase):
                         "windows": IS_WINDOWS,
                         "linux": IS_LINUX,
                         "rocm": TEST_WITH_ROCM,
-                        "asan": TEST_WITH_ASAN
+                        "asan": TEST_WITH_ASAN,
+                        "dynamo": TEST_WITH_TORCHDYNAMO,
                     }
+
+                    invalid_platforms = list(filter(lambda p: p not in platform_to_conditional, platforms))
+                    if len(invalid_platforms) > 0:
+                        invalid_plats_str = ", ".join(invalid_platforms)
+                        valid_plats = ", ".join(platform_to_conditional.keys())
+
+                        print(f"Test {disabled_test} is disabled for some unrecognized ",
+                              f"platforms: [{invalid_plats_str}]. Please edit issue {issue_url} to fix the platforms ",
+                              "assigned to this flaky test, changing \"Platforms: ...\" to a comma separated ",
+                              f"subset of the following (or leave it blank to match all platforms): {valid_plats}")
+
+                        # Sanitize the platforms list so that we continue to disable the test for any valid platforms given
+                        platforms = list(filter(lambda p: p in platform_to_conditional, platforms))
+
                     if platforms == [] or any([platform_to_conditional[platform] for platform in platforms]):
                         skip_msg = f"Test is disabled because an issue exists disabling it: {issue_url}" \
                             f" for {'all' if platforms == [] else ''}platform(s) {', '.join(platforms)}. " \
@@ -2014,13 +2023,13 @@ class TestCase(expecttest.TestCase):
         if TEST_WITH_TORCHDYNAMO:
             # TorchDynamo optimize annotation
             if TEST_WITH_TORCHINDUCTOR:
-                super_run = torchdynamo.optimize("inductor")(super().run)
+                super_run = torch._dynamo.optimize("inductor")(super().run)
             else:
-                super_run = torchdynamo.optimize("eager")(super().run)
+                super_run = torch._dynamo.optimize("eager")(super().run)
             super_run(result=result)
 
             # TODO - Reset for each test slows down testing significantly.
-            # torchdynamo.reset()
+            # torch._dynamo.reset()
         else:
             super().run(result=result)
 
@@ -2488,7 +2497,7 @@ class TestCase(expecttest.TestCase):
             # This emulates unittest.TestCase's behavior if a custom message passed and
             # TestCase.longMessage (https://docs.python.org/3/library/unittest.html#unittest.TestCase.longMessage)
             # is True (default)
-            msg=(lambda generated_msg: f"{generated_msg} : {msg}") if isinstance(msg, str) and self.longMessage else msg,
+            msg=(lambda generated_msg: f"{generated_msg}\n{msg}") if isinstance(msg, str) and self.longMessage else msg,
         )
 
     def assertNotEqual(self, x, y, msg: Optional[str] = None, *,                                       # type: ignore[override]

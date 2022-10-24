@@ -205,6 +205,7 @@ __all__ = [
     "prim_shape",
     "prim_tolist",
     "prim_tuple_construct",
+    "prim_type",
     "prim_unchecked_cast",
     "prim_uninitialized",
     "rand_like",
@@ -267,6 +268,8 @@ __all__ = [
     "unsafe_split_with_sizes",
     "unsafe_split",
     "unsqueeze",
+    "unsupported_complex_operators",
+    "noop_complex_operators",
     "unused",
     "var_mean",
     "var",
@@ -2067,6 +2070,21 @@ def eq(g: jit_utils.GraphContext, self, other):
         # ONNX doesn't have devices, so consider them all to be equal.
         # The no-op check for equality will get constant-folded.
         return g.op("Constant", value_t=torch.tensor(True, dtype=torch.bool))
+    self_node = self.node()
+    other_node = other.node()
+    if self_node.kind() == other_node.kind() == "onnx::Constant":
+        if self_node.kindOf("value") == other_node.kindOf("value") == "s":
+            # Exporting strings to ONNX is not supported.
+            # If both strings are constant, we can compare them directly.
+            # The no-op check for equality will get constant-folded.
+            return g.op(
+                "Constant",
+                value_t=torch.tensor(
+                    self_node.s("value") == other_node.s("value"),
+                    dtype=torch.bool,
+                ),
+            )
+
     return g.op("Equal", self, other)
 
 
@@ -2654,27 +2672,18 @@ def batch_norm(
         return res
 
 
+@_onnx_symbolic("aten::native_layer_norm")
+@symbolic_helper.quantized_args(True, False, False, False)
+@symbolic_helper.parse_args("v", "is", "v", "v", "f")
 @_beartype.beartype
-def _layer_norm_returns_normalized_input_mean_rstd(
+def native_layer_norm(
     g: jit_utils.GraphContext,
     input: _C.Value,
     normalized_shape: Sequence[int],
     weight: _C.Value,
     bias: _C.Value,
     eps: float,
-    cudnn_enable: bool,
-    return_mean_rstd: bool,
-) -> Tuple[_C.Value, Optional[_C.Value], Optional[_C.Value]]:
-    if symbolic_helper.is_caffe2_aten_fallback():
-        return g.at(
-            "layer_norm",
-            input,
-            weight,
-            bias,
-            normalized_shape_i=normalized_shape,
-            eps_f=eps,
-            cudnn_enable_i=cudnn_enable,
-        )
+) -> Tuple[_C.Value, _C.Value, _C.Value]:
     axes = [-i for i in range(len(normalized_shape), 0, -1)]
 
     two_cst = symbolic_helper._generate_wrapped_number(g, 2.0)
@@ -2693,23 +2702,9 @@ def _layer_norm_returns_normalized_input_mean_rstd(
     if not (bias is None or symbolic_helper._is_none(bias)):
         normalized = add(g, normalized, bias)
 
-    if return_mean_rstd:
-        # rdenominator = 1 / sqrt(variance + eps)
-        rdenominator = reciprocal(g, denominator)
-        return normalized, mean, rdenominator
-    return normalized, None, None
-
-
-@_onnx_symbolic("aten::native_layer_norm")
-@symbolic_helper.quantized_args(True, False, False, False)
-@symbolic_helper.parse_args("v", "is", "v", "v", "f")
-@_beartype.beartype
-def native_layer_norm(
-    g: jit_utils.GraphContext, input, normalized_shape, weight, bias, eps
-):
-    return _layer_norm_returns_normalized_input_mean_rstd(
-        g, input, normalized_shape, weight, bias, eps, False, True
-    )
+    # rdenominator := 1 / sqrt(variance + eps)
+    rdenominator = reciprocal(g, denominator)
+    return normalized, mean, rdenominator
 
 
 @_onnx_symbolic("aten::layer_norm")
@@ -2718,16 +2713,24 @@ def native_layer_norm(
 @_beartype.beartype
 def layer_norm(
     g: jit_utils.GraphContext,
-    input,
-    normalized_shape,
-    weight,
-    bias,
-    eps,
-    cudnn_enable,
-):
-    normalized, _, _ = _layer_norm_returns_normalized_input_mean_rstd(
-        g, input, normalized_shape, weight, bias, eps, cudnn_enable, False
-    )
+    input: _C.Value,
+    normalized_shape: Sequence[int],
+    weight: _C.Value,
+    bias: _C.Value,
+    eps: float,
+    cudnn_enable: bool,
+) -> _C.Value:
+    if symbolic_helper.is_caffe2_aten_fallback():
+        return g.at(
+            "layer_norm",
+            input,
+            weight,
+            bias,
+            normalized_shape_i=normalized_shape,
+            eps_f=eps,
+            cudnn_enable_i=cudnn_enable,
+        )
+    normalized, _, _ = native_layer_norm(g, input, normalized_shape, weight, bias, eps)
     return normalized
 
 
@@ -6636,6 +6639,21 @@ def prim_constant(g: jit_utils.GraphContext, *inputs, **attrs):
     )
 
 
+@_onnx_symbolic("prim::type")
+@_beartype.beartype
+def prim_type(g: jit_utils.GraphContext, device_value: _C.Value, *args, **kwargs):
+    if device_value.node().kind() == "prim::device":
+        device = jit_utils.get_device_from_value(device_value.node().input())
+        if device is not None:
+            return g.op("Constant", value_s=str(device))
+
+    return symbolic_helper._unimplemented(
+        "prim::type",
+        "Device type cannot be statically determined.",
+        device_value,
+    )
+
+
 @_onnx_symbolic("onnx::Placeholder")
 @_beartype.beartype
 def onnx_placeholder(g: jit_utils.GraphContext, *inputs, **attrs):
@@ -6644,3 +6662,35 @@ def onnx_placeholder(g: jit_utils.GraphContext, *inputs, **attrs):
     env = g.env
 
     return torch._C._jit_onnx_convert_pattern_from_subblock(block, node, env)
+
+
+@_onnx_symbolic("aten::resolve_conj")
+@_onnx_symbolic("aten::resolve_neg")
+@_beartype.beartype
+def noop_complex_operators(g: jit_utils.GraphContext, input: _C.Value):
+    # ONNX does not have operators to *directly* manipulate real/imaginary components
+    # However, a few torch APIs (e.g. .tolist()) use complex operations when input is real,
+    # which results in failures due to missing operators for complex numbers
+
+    # `aten::resolve_conj` and `aten::resolve_neg` can safely be implemented as no-op
+    return input
+
+
+@_onnx_symbolic("aten::_conj")
+@_onnx_symbolic("aten::conj_physical")
+@_beartype.beartype
+def unsupported_complex_operators(g: jit_utils.GraphContext, input: _C.Value):
+    # ONNX does not have operators to *directly* manipulate real/imaginary components
+    # However, a few torch APIs (e.g. .tolist()) use complex operations when input is real,
+    # which results in failures due to missing operators for complex numbers
+
+    # While `aten::_conj` and `aten::conj_phisical` raise exception when input is complex
+    if symbolic_helper.is_complex_value(input):
+        # FIXME(justinchuby): report correct name for symbolic being executed
+        return symbolic_helper._onnx_unsupported(
+            "aten::_conj, aten::conj_physical",
+            input,
+        )
+
+    # they can safely be implemented as no-op for real numbers only
+    return noop_complex_operators(g, input)
