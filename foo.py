@@ -1,6 +1,7 @@
 import torch
 from torch._ops import PyOperator
 from torch._C._functorch import TransformType
+from functorch._src.vmap import stupid_vmap, unwrap_batched, wrap_batched
 from functorch import vmap
 import functools
 import torch.utils._pytree as pytree
@@ -95,14 +96,14 @@ def reductify_leaf(tensor, tensor_bdim, desired_bdim):
 
 
 def reductify(tensors, tensor_bdims, desired_bdims):
-    tensors, spec = tree_flatten(tensors)
-    tensor_bdims, _ = tree_flatten(tensor_bdims)
-    desired_bdims, _ = tree_flatten(desired_bdims)
+    tensors, spec = pytree.tree_flatten(tensors)
+    tensor_bdims, _ = pytree.tree_flatten(tensor_bdims)
+    desired_bdims, _ = pytree.tree_flatten(desired_bdims)
 
     result = [reductify_leaf(tensor, bdim, desired_bdim)
               for tensor, bdim, desired_bdim
               in zip(tensors, tensor_bdims, desired_bdims)]
-    return tree_unflatten(result, spec)
+    return pytree.tree_unflatten(result, spec)
 
 
 def batchify(f_fwd, f_bwd, in_dims, batch_size):
@@ -127,7 +128,7 @@ def batchify(f_fwd, f_bwd, in_dims, batch_size):
 
 
 @custom_vjp_call.py_functorch_impl(TransformType.Vmap)
-def custom_vjp_call_vmap(interpreter, *operands):
+def custom_vjp_call_vmap(interpreter, f_fwd, f_bwd, *operands):
     current_level = interpreter.level()
     unwrapped_operands, in_dims = unwrap_batched(operands)
     new_f_fwd, new_f_bwd, get_out_dims = batchify(f_fwd, f_bwd, in_dims, interpreter.batch_size())
@@ -185,3 +186,14 @@ z = MyMatmul.apply(x, y)
 gx, gy = torch.autograd.grad(z, (x, y), gz)
 assert torch.allclose(gx, 2 * (gz @ y.T))
 assert torch.allclose(gy, 2 * (x.T @ gz))
+
+x = torch.randn(2, 3, 4, requires_grad=True)
+y = torch.randn(2, 4, 5, requires_grad=True)
+
+z = vmap(MyMatmul.apply)(x, y)
+gx, gy = torch.autograd.grad(z, [x, y], torch.ones_like(z))
+
+z = vmap(torch.mm)(x, y)
+egx, egy = torch.autograd.grad(z, [x, y], torch.ones_like(z))
+assert torch.allclose(gx / 2, egx)
+assert torch.allclose(gy / 2, egy)

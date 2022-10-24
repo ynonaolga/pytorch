@@ -20,24 +20,28 @@ class FunctorchInterpreter:
             del guard
 
     def level(self):
-        return self._cdata.level()
+        return self._cptr.level()
 
 
 class VmapInterpreter(FunctorchInterpreter):
-    def __init__(self, cdata: CVmapInterpreterPtr):
+    def __init__(self, cdata: CInterpreter):
+        assert cdata.key() == TransformType.Vmap
         self._cdata = cdata
+        self._cptr = CVmapInterpreterPtr(cdata)
 
     def py_process(self, op, args, kwargs):
         kernel = op.functorch_table[TransformType.Vmap]
         return kernel(self, *args, **kwargs)
 
     def batch_size(self):
-        return self._cdata.batchSize()
+        return self._cptr.batchSize()
 
 
 class GradInterpreter(FunctorchInterpreter):
-    def __init__(self, cdata: CGradInterpreterPtr):
+    def __init__(self, cdata: CInterpreter):
+        assert cdata.key() == TransformType.Grad
         self._cdata = cdata
+        self._cptr = CGradInterpreterPtr(cdata)
 
     def py_process(self, op, args, kwargs):
         kernel = op.functorch_table[TransformType.Grad]
@@ -47,9 +51,9 @@ class GradInterpreter(FunctorchInterpreter):
 def coerce_cinterpreter(cinterpreter: CInterpreter) -> FunctorchInterpreter:
     key = cinterpreter.key()
     if key == TransformType.Grad:
-        return GradInterpreter(CGradInterpreterPtr(cinterpreter))
+        return GradInterpreter(cinterpreter)
     if key == TransformType.Vmap:
-        return VmapInterpreter(CVmapInterpreterPtr(cinterpreter))
+        return VmapInterpreter(cinterpreter)
     raise RuntimeError(f"Don't know how to handle {key}")
 
 

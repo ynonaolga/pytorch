@@ -480,7 +480,8 @@ void initFuncTorchBindings(PyObject* module) {
     if (stack.size() == 0) {
       return c10::nullopt;
     }
-    return stack.back().interpreter();
+    auto result = stack.back().interpreter();
+    return result;
   });
   py::class_<at::functorch::WithoutTop>(m, "WithoutTop")
     .def(py::init<>());
