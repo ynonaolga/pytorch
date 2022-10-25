@@ -54,15 +54,27 @@ test(vmap(functools.partial(torch.sum, dim=0)),
 
 custom_vjp_call = PyOperator('custom_vjp_call')
 
-# TODO: registering to 'Autograd' doesn't work (alias keys don't work with py_impl)
-@custom_vjp_call.py_impl(DispatchKey.AutogradCPU)
-def custom_vjp_call_autograd(f_fwd, f_bwd, *operands):
+
+def custom_vjp_call_grad_generic(maybe_interpreter, f_fwd, f_bwd, *operands):
     class Generated(torch.autograd.Function):
         @staticmethod
         def forward(ctx, *operands):
-            outs, saved = f_fwd(*operands)
-            # TODO: the user may save things that aren't Tensors
-            ctx.save_for_backward(*saved)
+            if maybe_interpreter:
+                level = maybe_interpreter.level()
+                unwrapped_operands = pytree.tree_map(functools.partial(unwrap_grad, level), operands)
+
+                with torch.enable_grad(), maybe_interpreter.lower():
+                    output = custom_vjp_call(f_fwd, f_bwd, *unwrapped_operands)
+                    results, saved = output
+                    ctx.save_for_backward(*saved)
+
+                outs = pytree.tree_map(functools.partial(wrap_grad, level), results)
+                saved = pytree.tree_map(functools.partial(wrap_grad, level), saved)
+            else:
+                outs, saved = f_fwd(*operands)
+                # TODO: the user may save things that aren't Tensors
+                ctx.save_for_backward(*saved)
+
             flat_outs, outs_spec = pytree.tree_flatten(outs)
             outs_and_saved_and_spec = flat_outs + [saved, outs_spec]
             return tuple(outs_and_saved_and_spec)
@@ -83,6 +95,17 @@ def custom_vjp_call_autograd(f_fwd, f_bwd, *operands):
     saved = outs_and_saved_and_spec[-2]
     flat_outs = outs_and_saved_and_spec[:-2]
     return pytree.tree_unflatten(flat_outs, out_spec), saved
+
+
+@custom_vjp_call.py_functorch_impl(TransformType.Grad)
+def custom_vjp_call_grad(interpreter, f_fwd, f_bwd, *operands):
+    return custom_vjp_call_grad_generic(interpreter, f_fwd, f_bwd, *operands)
+
+
+# TODO: registering to 'Autograd' doesn't work (alias keys don't work with py_impl)
+@custom_vjp_call.py_impl(DispatchKey.AutogradCPU)
+def custom_vjp_call_autograd(f_fwd, f_bwd, *operands):
+    return custom_vjp_call_grad_generic(None, f_fwd, f_bwd, *operands)
 
 
 def reductify_leaf(tensor, tensor_bdim, desired_bdim):
@@ -211,44 +234,6 @@ def wrap_grad(level, t):
     return t
 
 
-@custom_vjp_call.py_functorch_impl(TransformType.Grad)
-def custom_vjp_call_grad(interpreter, f_fwd, f_bwd, *operands):
-    class Generated(torch.autograd.Function):
-        @staticmethod
-        def forward(ctx, *operands):
-            level = interpreter.level()
-            unwrapped_operands = pytree.tree_map(functools.partial(unwrap_grad, level), operands)
-
-            with torch.enable_grad(), interpreter.lower():
-                output = custom_vjp_call(f_fwd, f_bwd, *unwrapped_operands)
-                results, saved = output
-                ctx.save_for_backward(*saved)
-
-            outs = pytree.tree_map(functools.partial(wrap_grad, level), results)
-            saved = pytree.tree_map(functools.partial(wrap_grad, level), saved)
-
-            flat_outs, outs_spec = pytree.tree_flatten(outs)
-            outs_and_saved_and_spec = flat_outs + [saved, outs_spec]
-            return tuple(outs_and_saved_and_spec)
-
-        @staticmethod
-        def backward(ctx, *grads):
-            # Accounts for saved and spec
-            assert grads[-1] is None
-            assert grads[-2] is None
-            grads = grads[:-2]
-
-            saved = ctx.saved_tensors
-            result = f_bwd(saved, grads)
-            return result
-
-    outs_and_saved_and_spec = Generated.apply(*operands)
-    out_spec = outs_and_saved_and_spec[-1]
-    saved = outs_and_saved_and_spec[-2]
-    flat_outs = outs_and_saved_and_spec[:-2]
-    return pytree.tree_unflatten(flat_outs, out_spec), saved
-
-
 class MySin(CustomVjp):
     @staticmethod
     def forward(x):
@@ -281,4 +266,3 @@ assert torch.allclose(y, x.sin())
 # - {1, 2+} x {inputs, outputs}
 # - inplace operations inside body
 # - returns view
-# - pointwise (easy to reason about) vs complicated vmap case
