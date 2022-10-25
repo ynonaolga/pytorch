@@ -496,6 +496,7 @@ void initFuncTorchBindings(PyObject* module) {
     .def(py::init<const Interpreter*>())
     .def("key", &GradInterpreterPtr::key)
     .def("level", &GradInterpreterPtr::level)
+    .def("lift", &GradInterpreterPtr::lift)
     .def("prevGradMode", &GradInterpreterPtr::prevGradMode);
   py::class_<VmapInterpreterPtr>(m, "CVmapInterpreterPtr")
     .def(py::init<const Interpreter*>())

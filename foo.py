@@ -2,7 +2,7 @@ import torch
 from torch._ops import PyOperator
 from torch._C._functorch import TransformType
 from functorch._src.vmap import stupid_vmap, unwrap_batched, wrap_batched
-from functorch import vmap
+from functorch import vmap, grad
 import functools
 import torch.utils._pytree as pytree
 from torch._C import (
@@ -197,3 +197,88 @@ z = vmap(torch.mm)(x, y)
 egx, egy = torch.autograd.grad(z, [x, y], torch.ones_like(z))
 assert torch.allclose(gx / 2, egx)
 assert torch.allclose(gy / 2, egy)
+
+
+def unwrap_grad(level, t):
+    if isinstance(t, torch.Tensor):
+        return torch._C._functorch._unwrap_for_grad(t, level)
+    return t
+
+
+def wrap_grad(level, t):
+    if isinstance(t, torch.Tensor):
+        return torch._C._functorch._wrap_for_grad(t, level)
+    return t
+
+
+@custom_vjp_call.py_functorch_impl(TransformType.Grad)
+def custom_vjp_call_grad(interpreter, f_fwd, f_bwd, *operands):
+    class Generated(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx, *operands):
+            level = interpreter.level()
+            unwrapped_operands = pytree.tree_map(functools.partial(unwrap_grad, level), operands)
+
+            with torch.enable_grad(), interpreter.lower():
+                output = custom_vjp_call(f_fwd, f_bwd, *unwrapped_operands)
+                results, saved = output
+                ctx.save_for_backward(*saved)
+
+            outs = pytree.tree_map(functools.partial(wrap_grad, level), results)
+            saved = pytree.tree_map(functools.partial(wrap_grad, level), saved)
+
+            flat_outs, outs_spec = pytree.tree_flatten(outs)
+            outs_and_saved_and_spec = flat_outs + [saved, outs_spec]
+            return tuple(outs_and_saved_and_spec)
+
+        @staticmethod
+        def backward(ctx, *grads):
+            # Accounts for saved and spec
+            assert grads[-1] is None
+            assert grads[-2] is None
+            grads = grads[:-2]
+
+            saved = ctx.saved_tensors
+            result = f_bwd(saved, grads)
+            return result
+
+    outs_and_saved_and_spec = Generated.apply(*operands)
+    out_spec = outs_and_saved_and_spec[-1]
+    saved = outs_and_saved_and_spec[-2]
+    flat_outs = outs_and_saved_and_spec[:-2]
+    return pytree.tree_unflatten(flat_outs, out_spec), saved
+
+
+class MySin(CustomVjp):
+    @staticmethod
+    def forward(x):
+        return x.sin(), [x]
+
+    @staticmethod
+    def backward(saved, grads):
+        x, = saved
+        gy, = grads
+        return gy * x.sin()
+
+
+x = torch.randn([])
+y = grad(MySin.apply)(x)
+assert torch.allclose(y, x.sin())
+
+x = torch.randn(3)
+y = vmap(grad(MySin.apply))(x)
+assert torch.allclose(y, x.sin())
+
+# Things to test:
+#
+# grad
+# vmap
+# vmap x grad
+# grad x grad
+# jacrev
+#
+# - saved {input, output, intermediate}
+# - {1, 2+} x {inputs, outputs}
+# - inplace operations inside body
+# - returns view
+# - pointwise (easy to reason about) vs complicated vmap case

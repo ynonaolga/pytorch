@@ -1,5 +1,6 @@
 import contextlib
 import torch
+import torch.utils._pytree as pytree
 from torch._C._functorch import (
     TransformType,
     CInterpreter,
@@ -43,8 +44,15 @@ class GradInterpreter(FunctorchInterpreter):
         self._cdata = cdata
         self._cptr = CGradInterpreterPtr(cdata)
 
+    def lift(self, args, kwargs):
+        args, kwargs = pytree.tree_map_only(torch.Tensor, self._cptr.lift, [args, kwargs])
+        return args, kwargs
+
+    # TODO: needs custom lower for GradMode interaction.
+
     def py_process(self, op, args, kwargs):
         kernel = op.functorch_table[TransformType.Grad]
+        args, kwargs = self.lift(args, kwargs)
         return kernel(self, *args, **kwargs)
 
 
