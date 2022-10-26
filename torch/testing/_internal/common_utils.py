@@ -687,100 +687,101 @@ def run_tests(argv=UNITTEST_ARGS):
     suite = unittest.TestLoader().loadTestsFromModule(__main__)
     if not lint_test_case_extension(suite):
         sys.exit(1)
+    for i in range(100):
 
-    if TEST_IN_SUBPROCESS:
-        failed_tests = []
-        test_cases = discover_test_cases_recursively(suite)
-        for case in test_cases:
-            test_case_full_name = case.id().split('.', 1)[1]
-            other_args = []
-            if DISABLED_TESTS_FILE:
-                other_args.append('--import-disabled-tests')
-            if SLOW_TESTS_FILE:
-                other_args.append('--import-slow-tests')
-            cmd = [sys.executable] + [argv[0]] + other_args + argv[1:] + [test_case_full_name]
-            string_cmd = " ".join(cmd)
-            exitcode = shell(cmd)
-            if exitcode != 0:
-                # This is sort of hacky, but add on relevant env variables for distributed tests.
-                if 'TestDistBackendWithSpawn' in test_case_full_name:
-                    backend = os.environ.get("BACKEND", "")
-                    world_size = os.environ.get("WORLD_SIZE", "")
-                    env_prefix = f"BACKEND={backend} WORLD_SIZE={world_size}"
-                    string_cmd = env_prefix + " " + string_cmd
-                # Log the command to reproduce the failure.
-                print(f"Test exited with non-zero exitcode {exitcode}. Command to reproduce: {string_cmd}")
-                failed_tests.append(test_case_full_name)
+        if TEST_IN_SUBPROCESS:
+            failed_tests = []
+            test_cases = discover_test_cases_recursively(suite)
+            for case in test_cases:
+                test_case_full_name = case.id().split('.', 1)[1]
+                other_args = []
+                if DISABLED_TESTS_FILE:
+                    other_args.append('--import-disabled-tests')
+                if SLOW_TESTS_FILE:
+                    other_args.append('--import-slow-tests')
+                cmd = [sys.executable] + [argv[0]] + other_args + argv[1:] + [test_case_full_name]
+                string_cmd = " ".join(cmd)
+                exitcode = shell(cmd)
+                if exitcode != 0:
+                    # This is sort of hacky, but add on relevant env variables for distributed tests.
+                    if 'TestDistBackendWithSpawn' in test_case_full_name:
+                        backend = os.environ.get("BACKEND", "")
+                        world_size = os.environ.get("WORLD_SIZE", "")
+                        env_prefix = f"BACKEND={backend} WORLD_SIZE={world_size}"
+                        string_cmd = env_prefix + " " + string_cmd
+                    # Log the command to reproduce the failure.
+                    print(f"Test exited with non-zero exitcode {exitcode}. Command to reproduce: {string_cmd}")
+                    failed_tests.append(test_case_full_name)
 
-        assert len(failed_tests) == 0, "{} unit test(s) failed:\n\t{}".format(
-            len(failed_tests), '\n\t'.join(failed_tests))
-    elif RUN_PARALLEL > 1:
-        test_cases = discover_test_cases_recursively(suite)
-        test_batches = chunk_list(get_test_names(test_cases), RUN_PARALLEL)
-        processes = []
-        for i in range(RUN_PARALLEL):
-            command = [sys.executable] + argv + ['--log-suffix=-shard-{}'.format(i + 1)] + test_batches[i]
-            processes.append(subprocess.Popen(command, universal_newlines=True))
-        failed = False
-        for p in processes:
-            failed |= wait_for_process(p) != 0
-        assert not failed, "Some test shards have failed"
-    elif USE_PYTEST:
-        if TEST_SAVE_XML:
-            test_report_path = get_report_path(pytest=True)
-            print(f'Test results will be stored in {test_report_path}')
+            assert len(failed_tests) == 0, "{} unit test(s) failed:\n\t{}".format(
+                len(failed_tests), '\n\t'.join(failed_tests))
+        elif RUN_PARALLEL > 1:
+            test_cases = discover_test_cases_recursively(suite)
+            test_batches = chunk_list(get_test_names(test_cases), RUN_PARALLEL)
+            processes = []
+            for i in range(RUN_PARALLEL):
+                command = [sys.executable] + argv + ['--log-suffix=-shard-{}'.format(i + 1)] + test_batches[i]
+                processes.append(subprocess.Popen(command, universal_newlines=True))
+            failed = False
+            for p in processes:
+                failed |= wait_for_process(p) != 0
+            assert not failed, "Some test shards have failed"
+        elif USE_PYTEST:
+            if TEST_SAVE_XML:
+                test_report_path = get_report_path(pytest=True)
+                print(f'Test results will be stored in {test_report_path}')
 
-        import pytest
-        os.environ["NO_COLOR"] = "1"
-        os.environ["USING_PYTEST"] = "1"
-        exit_code = pytest.main(args=argv + [f'--junit-xml-reruns={test_report_path}'] if TEST_SAVE_XML else [])
-        del os.environ["USING_PYTEST"]
-        if TEST_SAVE_XML:
-            sanitize_pytest_xml(test_report_path)
-        print("If in CI, skip info is located in the xml test reports, please either go to s3 or the hud to download them")
-        # exitcode of 5 means no tests were found, which happens since some test configs don't
-        # run tests from certain files
-        exit(0 if exit_code == 5 else exit_code)
-    elif TEST_SAVE_XML is not None:
-        # import here so that non-CI doesn't need xmlrunner installed
-        import xmlrunner  # type: ignore[import]
-        from xmlrunner.result import _XMLTestResult  # type: ignore[import]
+            import pytest
+            os.environ["NO_COLOR"] = "1"
+            os.environ["USING_PYTEST"] = "1"
+            exit_code = pytest.main(args=argv + [f'--junit-xml-reruns={test_report_path}'] if TEST_SAVE_XML else [])
+            del os.environ["USING_PYTEST"]
+            if TEST_SAVE_XML:
+                sanitize_pytest_xml(test_report_path)
+            print("If in CI, skip info is located in the xml test reports, please either go to s3 or the hud to download them")
+            # exitcode of 5 means no tests were found, which happens since some test configs don't
+            # run tests from certain files
+            exit(0 if exit_code == 5 else exit_code)
+        elif TEST_SAVE_XML is not None:
+            # import here so that non-CI doesn't need xmlrunner installed
+            import xmlrunner  # type: ignore[import]
+            from xmlrunner.result import _XMLTestResult  # type: ignore[import]
 
-        class XMLTestResultVerbose(_XMLTestResult):
-            """
-            Adding verbosity to test outputs:
-            by default test summary prints 'skip',
-            but we want to also print the skip reason.
-            GH issue: https://github.com/pytorch/pytorch/issues/69014
+            class XMLTestResultVerbose(_XMLTestResult):
+                """
+                Adding verbosity to test outputs:
+                by default test summary prints 'skip',
+                but we want to also print the skip reason.
+                GH issue: https://github.com/pytorch/pytorch/issues/69014
 
-            This works with unittest_xml_reporting<=3.2.0,>=2.0.0
-            (3.2.0 is latest at the moment)
-            """
-            def __init__(self, *args, **kwargs):
-                super().__init__(*args, **kwargs)
+                This works with unittest_xml_reporting<=3.2.0,>=2.0.0
+                (3.2.0 is latest at the moment)
+                """
+                def __init__(self, *args, **kwargs):
+                    super().__init__(*args, **kwargs)
 
-            def addSkip(self, test, reason):
-                super().addSkip(test, reason)
-                for c in self.callback.__closure__:
-                    if isinstance(c.cell_contents, str) and c.cell_contents == 'skip':
-                        # this message is printed in test summary;
-                        # it stands for `verbose_str` captured in the closure
-                        c.cell_contents = f"skip: {reason}"
+                def addSkip(self, test, reason):
+                    super().addSkip(test, reason)
+                    for c in self.callback.__closure__:
+                        if isinstance(c.cell_contents, str) and c.cell_contents == 'skip':
+                            # this message is printed in test summary;
+                            # it stands for `verbose_str` captured in the closure
+                            c.cell_contents = f"skip: {reason}"
 
-        test_report_path = get_report_path()
-        verbose = '--verbose' in argv or '-v' in argv
-        if verbose:
-            print(f'Test results will be stored in {test_report_path}')
-        unittest.main(argv=argv, testRunner=xmlrunner.XMLTestRunner(
-            output=test_report_path,
-            verbosity=2 if verbose else 1,
-            resultclass=XMLTestResultVerbose))
-    elif REPEAT_COUNT > 1:
-        for _ in range(REPEAT_COUNT):
-            if not unittest.main(exit=False, argv=argv).result.wasSuccessful():
-                sys.exit(-1)
-    else:
-        unittest.main(argv=argv)
+            test_report_path = get_report_path()
+            verbose = '--verbose' in argv or '-v' in argv
+            if verbose:
+                print(f'Test results will be stored in {test_report_path}')
+            unittest.main(argv=argv, testRunner=xmlrunner.XMLTestRunner(
+                output=test_report_path,
+                verbosity=2 if verbose else 1,
+                resultclass=XMLTestResultVerbose), exit=False)
+        elif REPEAT_COUNT > 1:
+            for _ in range(REPEAT_COUNT):
+                if not unittest.main(exit=False, argv=argv).result.wasSuccessful():
+                    sys.exit(-1)
+        else:
+            unittest.main(argv=argv)
 
 IS_LINUX = sys.platform == "linux"
 IS_WINDOWS = sys.platform == "win32"
@@ -1649,6 +1650,7 @@ def check_if_enable(test: unittest.TestCase):
         if not TEST_WITH_SLOW:
             raise unittest.SkipTest("test is slow; run with PYTORCH_TEST_WITH_SLOW to enable test")
     sanitized_test_method_name = remove_device_and_dtype_suffixes(test._testMethodName)
+    skippped = False
     if not IS_SANDCASTLE:
         for disabled_test, (issue_url, platforms) in disabled_tests_dict.items():
             disable_test_parts = disabled_test.split()
@@ -1688,7 +1690,9 @@ def check_if_enable(test: unittest.TestCase):
                             f" for {'all' if platforms == [] else ''}platform(s) {', '.join(platforms)}. " \
                             "If you're seeing this on your local machine and would like to enable this test, " \
                             "please make sure CI is not set and you are not using the flag --import-disabled-tests."
-                        raise unittest.SkipTest(skip_msg)
+                        skippped = True
+    if not skippped:
+        raise unittest.SkipTest("not disabled")
     if TEST_SKIP_FAST:
         if not getattr(test, test._testMethodName).__dict__.get('slow_test', False):
             raise unittest.SkipTest("test is fast; we disabled it with PYTORCH_TEST_SKIP_FAST")
