@@ -26,7 +26,8 @@ enum MPSReductionType {
   SUM,
   PROD,
   MEAN,
-  COUNT_NONZERO
+  COUNT_NONZERO,
+  NANSUM
 };
 
 
@@ -238,6 +239,22 @@ void reduction_out_mps
             castOutputTensor = [mpsGraph reductionMinimumWithTensor:inputTensor
                                                                axes:axes
                                                                name:nil];
+          } else if(reduction_type == MPSReductionType::NANSUM) {
+            MPSGraphTensor* zeros = [mpsGraph constantWithScalar:0
+                                                        dataType:castInputTensor.dataType];
+
+            MPSGraphTensor* nans = [mpsGraph notEqualWithPrimaryTensor:castInputTensor
+                                                       secondaryTensor:castInputTensor
+                                                                  name:nil];
+
+            MPSGraphTensor* withoutNans = [mpsGraph selectWithPredicateTensor:nans
+                                                          truePredicateTensor:zeros
+                                                         falsePredicateTensor:castInputTensor
+                                                                         name:nil];
+
+            castOutputTensor = [mpsGraph reductionSumWithTensor:withoutNans
+                                                           axes:axes
+                                                           name:nil];
           }
 
           MPSGraphTensor* outputTensor = nil;
@@ -375,6 +392,68 @@ Tensor count_nonzero_mps(const Tensor& self, IntArrayRef dims){
 
   free(raw_output_shape);
 
+  return output_t;
+}
+
+Tensor& nansum_out_mps(
+    const Tensor& input_t,
+    OptionalIntArrayRef opt_dim,
+    bool keepdim,
+    c10::optional<ScalarType> dtype,
+    Tensor& output_t) {
+  reduction_out_mps(
+      input_t,
+      opt_dim,
+      keepdim,
+      dtype,
+      output_t,
+      MPSReductionType::NANSUM,
+      "nansum_out_mps");
+  return output_t;
+}
+
+Tensor nansum_mps(
+    const Tensor& self,
+    OptionalIntArrayRef dims,
+    bool keepdim,
+    c10::optional<ScalarType> dtype) {
+  NSMutableArray<NSNumber*>* axes = nil;
+  NSMutableArray<NSNumber*>* apparent_input_shape = nil;
+  NSMutableArray<NSNumber*>* apparent_output_shape = nil;
+  NSMutableArray<NSNumber*>* output_shape = nil;
+
+  set_axes_and_shapes(
+      self,
+      dims,
+      axes,
+      apparent_input_shape,
+      apparent_output_shape,
+      output_shape);
+
+  int64_t* raw_output_shape =
+      (int64_t*)malloc([output_shape count] * sizeof(int64_t));
+  for (int i = 0; i < [output_shape count]; i++) {
+    raw_output_shape[i] = [output_shape[i] longValue];
+  }
+
+  Tensor output_t = at::native::empty_mps(
+      IntArrayRef(raw_output_shape, [output_shape count]),
+      get_dtype_from_self(self, dtype, true),
+      c10::nullopt,
+      kMPS,
+      c10::nullopt,
+      c10::nullopt);
+
+  reduction_out_mps(
+      self,
+      dims,
+      keepdim,
+      self.scalar_type(),
+      const_cast<Tensor&>(output_t),
+      MPSReductionType::NANSUM,
+      "nansum_mps");
+
+  free(raw_output_shape);
   return output_t;
 }
 
