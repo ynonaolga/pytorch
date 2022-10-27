@@ -2,6 +2,7 @@ from ._ops import OpOverload
 from typing import Set
 import traceback
 import torch
+import os
 
 __all__ = ['Library', 'impl', 'define']
 
@@ -29,6 +30,9 @@ class Library:
         dispatch_key: PyTorch dispatch key (default: "")
     """
     def __init__(self, ns, kind, dispatch_key=""):
+        if os.environ.get('PYTORCH_DISABLE_LIBRARY', "0") == "1":
+            raise RuntimeError("Trying to use torch.library in an environment where it is disabled")
+
         if kind != "IMPL" and kind != "DEF":
             raise ValueError("Unsupported kind: ", kind)
 
@@ -76,6 +80,7 @@ class Library:
                           the dispatch key that the library was created with.
 
         Example::
+            >>> # xdoctest: +SKIP
             >>> my_lib = Library("aten", "IMPL")
             >>> def div_cpu(self, other):
             >>>    return self * (1 / other)
@@ -109,13 +114,12 @@ class Library:
             dispatcher_op_name = name
             if '::' not in dispatcher_op_name:
                 dispatcher_op_name = f'{self.ns}::{dispatcher_op_name}'
-            # get a string containing the names of every dispatch key that the operator has a registration for.
-            dispatch_key_registration = torch._C._dispatch_dump(dispatcher_op_name)
+
             # Internally, we shouldn't be registering meta kernels for any operators that
             # have CompositeImplicitAutograd kernels.
             # Instead, we should be letting those decompositions run, and writing meta kernels
             # only for the base operators.
-            if 'CompositeImplicitAutograd' in dispatch_key_registration:
+            if torch._C._dispatch_has_kernel_for_dispatch_key(dispatcher_op_name, "CompositeImplicitAutograd"):
                 raise RuntimeError(
                     f"We should not register a meta kernel directly to the operator '{name}',"
                     " because it has a CompositeImplicitAutograd kernel in core."

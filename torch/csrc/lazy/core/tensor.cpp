@@ -83,12 +83,7 @@ LazyTensor::LazyTensor(
     const BackendDevice& device)
     : LazyTensor(std::make_shared<Data>(std::move(view), device)) {}
 
-LazyTensor::LazyTensor(std::shared_ptr<Data> data)
-    : data_(std::move(data)),
-      storage_(c10::Storage(
-          {},
-          0,
-          c10::DataPtr(nullptr, backendDeviceToAtenDevice(data_->device)))) {}
+LazyTensor::LazyTensor(std::shared_ptr<Data> data) : data_(std::move(data)) {}
 
 LazyTensor::Data* LazyTensor::data() const {
   TORCH_CHECK(data_ != nullptr, "Trying to access a null cursor");
@@ -353,9 +348,7 @@ std::shared_ptr<LazyView> LazyTensor::CreateView(ViewInfo view_info) const {
 }
 
 LazyTensorPtr LazyTensor::CreateViewTensor(ViewInfo view_info) const {
-  auto new_tensor = Create(CreateView(std::move(view_info)), GetDevice());
-  new_tensor->storage_ = Storage();
-  return new_tensor;
+  return Create(CreateView(std::move(view_info)), GetDevice());
 }
 
 at::Tensor LazyTensor::ToTensor(bool detached) {
@@ -470,7 +463,7 @@ int64_t LazyTensor::GetNextTensorId() {
   return id_generator->fetch_add(1);
 }
 
-torch::lazy::Value GetTensorList(c10::ArrayRef<at::Tensor> tensors) {
+torch::lazy::Value GetTensorList(at::ITensorListRef tensors) {
   std::vector<Value> values;
   for (const auto& t : tensors) {
     auto* impl = dynamic_cast<LTCTensorImpl*>(t.unsafeGetTensorImpl());

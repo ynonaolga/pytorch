@@ -67,7 +67,10 @@ install_ubuntu() {
     wget \
     sudo \
     vim \
-    jq
+    jq \
+    libtool \
+    unzip \
+    gdb
 
   # Should resolve issues related to various apt package repository cert issues
   # see: https://github.com/pytorch/pytorch/issues/65931
@@ -125,7 +128,9 @@ install_centos() {
     opencv-devel \
     sudo \
     wget \
-    vim
+    vim \
+    unzip \
+    gdb
 
   # Cleanup
   yum clean all

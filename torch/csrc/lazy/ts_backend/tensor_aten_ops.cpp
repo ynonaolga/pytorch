@@ -39,7 +39,7 @@ torch::lazy::Value MaybeExpand(
 std::vector<int64_t> GetExpandDimensions(
     const torch::lazy::Shape& shape,
     std::vector<int64_t> dimensions) {
-  CHECK_GE(dimensions.size(), shape.dim()) << shape;
+  TORCH_CHECK_GE(dimensions.size(), shape.dim()) << shape;
   int64_t base = dimensions.size() - shape.dim();
   for (size_t i = 0; i < shape.dim(); ++i) {
     if (dimensions[base + i] == -1) {
@@ -105,14 +105,12 @@ torch::lazy::LazyTensorPtr expand(
     const torch::lazy::LazyTensorPtr& input,
     std::vector<int64_t> size) {
   auto input_shape = input->shape();
-  auto output = torch::lazy::LazyTensor::Create(
+  return torch::lazy::LazyTensor::Create(
       torch::lazy::MakeExpand(
           input->GetIrValue(),
           GetExpandDimensions(input_shape.Get(), std::move(size)),
           /*is_scalar_expand=*/false),
       input->GetDevice());
-  output->SetStorage(input->Storage());
-  return output;
 }
 
 void fill_(torch::lazy::LazyTensorPtr& input, const at::Scalar& value) {

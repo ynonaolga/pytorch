@@ -1,9 +1,9 @@
 #pragma once
 
-#include <c10/core/SymbolicIntNode.h>
+#include <c10/core/SymIntNodeImpl.h>
 #include <c10/util/intrusive_ptr.h>
+#include <torch/csrc/lazy/backend/backend_data.h>
 #include <torch/csrc/lazy/backend/backend_device.h>
-#include <torch/csrc/lazy/backend/backend_interface.h>
 #include <torch/csrc/lazy/core/ir.h>
 #include <torch/csrc/lazy/core/lazy_view.h>
 #include <torch/csrc/lazy/core/util.h>
@@ -11,11 +11,10 @@
 namespace torch {
 namespace lazy {
 
-class TORCH_API SymbolicIntNode : public c10::SymbolicIntNode {
+class TORCH_API SymIntNodeImpl : public c10::SymIntNodeImpl {
  public:
-  SymbolicIntNode(NodePtr ptr) : node_(std::move(ptr)){};
-  std::shared_ptr<c10::SymbolicIntNode> add(
-      const std::shared_ptr<c10::SymbolicIntNode>& other) override {
+  SymIntNodeImpl(NodePtr ptr) : node_(std::move(ptr)){};
+  c10::SymIntNode add(const c10::SymIntNode& other) override {
     TORCH_CHECK(false, "NYI");
   }
   NodePtr node_;
@@ -144,15 +143,6 @@ class TORCH_API LazyTensor : public c10::intrusive_ptr_target {
   // Applies the queue of operations in preparation for using the data.
   void ApplyPendingGraph();
 
-  const c10::Storage& Storage() const {
-    return storage_;
-  }
-  // This is currently only used by outlier view ops such as expand that
-  // don't go through CreateViewTensor to support Tensor.is_alias_of.
-  void SetStorage(const c10::Storage& storage) {
-    storage_ = storage;
-  }
-
  private:
   LazyTensor(const at::Tensor& tensor, const BackendDevice& device);
   LazyTensor(Value ir_value, const BackendDevice& device);
@@ -197,12 +187,6 @@ class TORCH_API LazyTensor : public c10::intrusive_ptr_target {
   static int64_t GetNextTensorId();
 
   std::shared_ptr<Data> data_;
-  // Temporarily used to suport Tensor.is_alias_of().
-  // This is a fake storage that doesn't store anything.
-  // Instead it serves as a marker to mark LazyTensors that
-  // points to the same storage, and thus alias of each other.
-  // FIXME(alanwaketan): Remove this once we have functionalization (bdhirsh).
-  c10::Storage storage_;
 };
 
 // Utils to convert at::Tensor to LazyTensor, and vice versa.
@@ -212,7 +196,7 @@ class TORCH_API LazyTensor : public c10::intrusive_ptr_target {
 // skips
 //       the LazyTensor wrappers, assuming that the list of underlying IR nodes
 //       is actually more useful for downstream computations.  TBD.
-TORCH_API torch::lazy::Value GetTensorList(c10::ArrayRef<at::Tensor> tensors);
+TORCH_API torch::lazy::Value GetTensorList(at::ITensorListRef tensors);
 
 // Section 1: at::Tensor => LazyTensor.
 // Extracts the LazyTensor out of an at::Tensor. Returns a null LazyTensor
