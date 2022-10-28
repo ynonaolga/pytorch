@@ -3,6 +3,7 @@ import torch.nn as nn
 
 from collections import OrderedDict
 from typing import List, Optional
+from . import replicate
 
 
 def contract(func):
