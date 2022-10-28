@@ -50,7 +50,12 @@ void THCPGraph_init(PyObject* module) {
           &::at::cuda::CUDAGraph::pool,
           py::call_guard<py::gil_scoped_release>())
       .def(
+          "enable_debug_mode",
+          &::at::cuda::CUDAGraph::enable_debug_mode,
+          py::call_guard<py::gil_scoped_release>())
+      .def(
           "debug_dump",
           &::at::cuda::CUDAGraph::debug_dump,
-          py::call_guard<py::gil_scoped_release>());
+          py::call_guard<py::gil_scoped_release>(),
+          py::arg("debug_path"));
 }
