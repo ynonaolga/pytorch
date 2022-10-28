@@ -2,17 +2,17 @@
 import os
 import unittest
 from unittest.mock import patch
-
 import torch
 import torch._dynamo
 import torch._dynamo.test_case
 import torch.distributed as dist
+from contextlib import contextmanager
 from torch import nn
 from torch._dynamo import config
 from torch._dynamo.utils import same
 from torch._inductor.utils import has_triton
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.testing._internal.common_distributed import requires_nccl
+from torch.testing._internal.common_distributed import MultiProcessTestCase, skip_if_lt_x_gpu, requires_nccl
 
 def init_weights(m):
     if isinstance(m, nn.Linear):
@@ -31,6 +31,13 @@ class ToyModel(nn.Module):
     def forward(self, inputs):
         return self.net(inputs)
 
+def get_model(device, bsz=20, in_feat=10, hidden_feat=5000, out_feat=5):
+    m = ToyModel(in_feat=in_feat, hidden_feat=hidden_feat, out_feat=out_feat).to(device)
+    m.apply(init_weights)
+    inputs = torch.rand(bsz, in_feat).to(device)
+    outputs = m(inputs)
+    return m, inputs, outputs
+
 
 class CheckSplitsCompiler:
     def __init__(self):
@@ -39,6 +46,51 @@ class CheckSplitsCompiler:
     def compile_fn(self, gm, example_inputs):
         self.compiler_called += 1
         return gm
+
+
+@requires_nccl()
+class TestDistributedMultiProc(MultiProcessTestCase):
+    def setUp(self):
+        super(TestDistributedMultiProc, self).setUp()
+        self._spawn_processes()
+
+    def tearDown(self):
+        super(TestDistributedMultiProc, self).tearDown()
+        try:
+            os.remove(self.file_name)
+        except OSError:
+            pass
+
+    @property
+    def world_size(self) -> int:
+        return torch.cuda.device_count()
+
+    @contextmanager
+    def _per_rank_init(self):
+        # This should wrap the code that
+        torch.cuda.set_device(self.rank)
+        os.environ['MASTER_ADDR'] = 'localhost'
+        os.environ['MASTER_PORT'] = '6789'
+        dist.init_process_group("nccl", rank=self.rank, world_size=self.world_size)
+        # Due to composability issues between _dynamo.test_case.TestCase and MultiProcessTestCase,
+        # Just manually implement the most important part of the dynamo behavior to reset/clear.
+        torch._dynamo.reset()
+        torch._dynamo.utils.counters.clear()
+        yield
+        torch._dynamo.reset()
+        torch._dynamo.utils.counters.clear()
+        dist.destroy_process_group()
+
+
+    @skip_if_lt_x_gpu(2)
+    @patch.object(config, "optimize_ddp", False)
+    def test_ddp_baseline_aot_eager_multiprocess(self):
+        with self._per_rank_init():
+            m, inputs, correct_outputs = get_model("cuda")
+            ddp_m = DDP(m)
+            ddp_m = torch._dynamo.optimize("aot_eager")(ddp_m)
+            outputs = ddp_m(inputs)
+            self.assertTrue(same(correct_outputs, outputs))
 
 
 @requires_nccl()
