@@ -1221,15 +1221,10 @@ std::string FunctionSignature::toString() const {
         c10::str(
             signature.name.c_str(),
             "() takes from ",
-            // TODO(shikanime): maybe need to fix the %ld format specifier
             min_args,
             " to ",
-            // TODO(shikanime): maybe need to fix the %ld
-            // format specifier
             max_pos_args,
             " positional arguments but ",
-            // TODO(shikanime): maybe need to fix the %ld
-            // format specifier
             nargs_,
             " were given"));
   }
@@ -1238,14 +1233,10 @@ std::string FunctionSignature::toString() const {
       c10::str(
           signature.name.c_str(),
           "() takes ",
-          // TODO(shikanime): maybe need to fix the %ld format
-          // specifier
           max_pos_args,
           " positional argument",
           max_pos_args == 1 ? "" : "s",
           " but ",
-          // TODO(shikanime): maybe need to fix the %ld format
-          // specifier
           nargs_,
           " ",
           nargs == 1 ? "was" : "were",
@@ -1450,9 +1441,7 @@ bool FunctionSignature::parse(
                   "(): argument '",
                   param.name,
                   "' (position ",
-                  // TODO(shikanime): maybe need to fix the
-                  // %ld format specifier
-                  static_cast<long>(arg_pos + 1),
+                  arg_pos + 1,
                   ") must be ",
                   param.type_name(),
                   ", but found element of type ",
@@ -1461,9 +1450,7 @@ bool FunctionSignature::parse(
                               .ptr())
                       ->tp_name,
                   " at pos ",
-                  // TODO(shikanime): maybe need to fix the
-                  // %ld format specifier
-                  static_cast<long>(failed_idx)));
+                  failed_idx));
         }
         C10_THROW_ERROR(
             TypeError,
@@ -1472,9 +1459,7 @@ bool FunctionSignature::parse(
                 "(): argument '",
                 param.name,
                 "' (position ",
-                // TODO(shikanime): maybe need to fix the %ld
-                // format specifier
-                static_cast<long>(arg_pos + 1),
+                arg_pos + 1,
                 ") must be ",
                 param.type_name(),
                 ", not ",
