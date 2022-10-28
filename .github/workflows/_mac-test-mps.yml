@@ -65,5 +65,6 @@ jobs:
           set -ex
           # TODO(https://github.com/pytorch/pytorch/issues/79293)
 
+          curl https://raw.githubusercontent.com/pytorch/test-infra/generated-stats/stats/test-times.json > .pytorch-disabled-tests.json
           ${CONDA_RUN} --cwd test python3 test_mps.py -v
           ${CONDA_RUN} --cwd test python3 test_metal.py -v
