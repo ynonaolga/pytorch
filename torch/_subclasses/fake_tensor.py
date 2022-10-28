@@ -24,6 +24,7 @@ T = TypeVar("T")
 TensorWeakRef = Any
 
 aten = torch.ops.aten
+prims = torch.ops.prims
 
 CONSTANT_NUMEL_LIMIT = 1
 
@@ -113,20 +114,6 @@ def _is_tensor_constructor(func: OpOverload):
 @functools.lru_cache(None)
 def get_schema_info(func):
     return torch._C._SchemaInfo(func._schema)  # type: ignore[attr-defined]
-
-
-# many of the decompositions registered to torch/_prims do not at the moment model
-# aliasing or strides, so as an incremental step, just enable the decompositions in
-# torch/_decomp/decompositions.py.
-# decomps are used for aot autograd tracing so we would like to unify on their
-# implementation and add additional testing to them
-@functools.lru_cache(None)
-def torch_decomp_decompositions(func):
-    from torch._decomp import decomposition_table
-
-    decompositions = torch._decomp.decompositions
-    decomp_attrs = [getattr(decompositions, attr) for attr in dir(decompositions)]
-    return decomposition_table[func] in decomp_attrs
 
 
 def tree_flatten_only(ty: Type[T], pytree: PyTree):
@@ -754,21 +741,19 @@ class FakeTensorMode(TorchDispatchMode):
         # is written to must be invalidated
         self.invalidate_written_to_constants(func, flat_arg_fake_tensors, args, kwargs)
 
-        from torch._decomp import decomposition_table
-
         with self:
             # Decomposes CompositeImplicitAutograd ops
             r = func.decompose(*args, **kwargs)
             if r is not NotImplemented:
                 return r
 
+        from torch._meta_registrations import all_meta_table
+
         # IDK: feels bad man, sym_numel on as_strided infinite loops otherwise
         if (
             has_symbolic_sizes
             and func not in self.functions_with_cpp_meta_impl_that_support_symint
         ):
-            from torch._decomp import meta_table as meta_table
-
             with no_dispatch():
                 if func == aten.size.default:
                     sys.stderr.write(
@@ -779,19 +764,15 @@ class FakeTensorMode(TorchDispatchMode):
                     return None
 
             with self:
-                if func in meta_table:
-                    r = meta_table[func](*args, **kwargs)
+                if func in all_meta_table:
+                    r = all_meta_table[func](*args, **kwargs)
                     return r
-                if func in decomposition_table:
-                    return decomposition_table[func](*args, **kwargs)
 
-        if (
-            func in decomposition_table
-            and torch_decomp_decompositions(func)
-            and all(not e.is_sparse for e in flat_arg_fake_tensors)
+        if func in all_meta_table and all(
+            not e.is_sparse for e in flat_arg_fake_tensors
         ):
             with self:
-                return decomposition_table[func](*args, **kwargs)
+                return all_meta_table[func](*args, **kwargs)
 
         # prims already wrap FakeTensor inputs to FakeTensor outputs
         # and do device logic, we dont need do anything but run them
@@ -904,6 +885,7 @@ class FakeTensorMode(TorchDispatchMode):
     @property
     def functions_with_cpp_meta_impl_that_support_symint(self):
         return [
+            prims.empty_strided.default,
             aten.empty_strided.default,
             aten.as_strided_scatter.default,
             aten.as_strided.default,
