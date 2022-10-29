@@ -322,28 +322,28 @@ static Tensor dispatch_copy_(const Tensor & self, const Tensor & other, bool non
 static double dispatch_to_CDouble(const Tensor & self) {
   pybind11::gil_scoped_release no_gil;
   OptionalDeviceGuard device_guard(device_of(self));
-  TORCH_CHECK_VALUE(self.numel() != 1, "only one element tensors can be converted to Python scalars");
+  TORCH_CHECK_VALUE(self.numel() == 1, "only one element tensors can be converted to Python scalars");
   return self.item<double>();
 }
 
 static c10::complex<double> dispatch_to_CComplexDouble(const Tensor & self) {
   pybind11::gil_scoped_release no_gil;
   OptionalDeviceGuard device_guard(device_of(self));
-  TORCH_CHECK_VALUE(self.numel() != 1, "only one element tensors can be converted to Python scalars");
+  TORCH_CHECK_VALUE(self.numel() == 1, "only one element tensors can be converted to Python scalars");
   return self.item<c10::complex<double>>();
 }
 
 static int64_t dispatch_to_CLong(const Tensor & self) {
   pybind11::gil_scoped_release no_gil;
   OptionalDeviceGuard device_guard(device_of(self));
-  TORCH_CHECK_VALUE(self.numel() != 1, "only one element tensors can be converted to Python scalars");
+  TORCH_CHECK_VALUE(self.numel() == 1, "only one element tensors can be converted to Python scalars");
   return self.item<int64_t>();
 }
 
 static bool dispatch_to_Bool(const Tensor & self) {
   pybind11::gil_scoped_release no_gil;
   OptionalDeviceGuard device_guard(device_of(self));
-  TORCH_CHECK_VALUE(self.numel() != 1, "only one element tensors can be converted to Python scalars");
+  TORCH_CHECK_VALUE(self.numel() == 1, "only one element tensors can be converted to Python scalars");
   return self.item<bool>();
 }
 
@@ -397,8 +397,8 @@ static PyObject * THPVariable_index_scalar(PyObject* self, PyObject* args) {
   // TODO: change the condition to `self_.dim() != 0` once we expose scalars
   // in PyTorch.
   TORCH_CHECK_TYPE(
-      !isIntegralType(self_.scalar_type(), /*includeBool=*/true) ||
-          self_.numel() != 1,
+      isIntegralType(self_.scalar_type(), /*includeBool=*/true) &&
+          self_.numel() == 1,
       "only integer tensors of a single element can be converted to an index");
   return wrap(dispatch_to_CLong(self_));
   END_HANDLE_TH_ERRORS
@@ -417,7 +417,7 @@ static PyObject * THPVariable_invert(PyObject* self, PyObject* args) {
   }
   auto& self_ = THPVariable_Unpack(self);
   TORCH_CHECK_TYPE(
-      !isIntegralType(self_.scalar_type(), /*includeBool=*/true),
+      isIntegralType(self_.scalar_type(), /*includeBool=*/true),
       "~ (operator.invert) is only implemented on integer and Boolean-type tensors");
   return THPVariable_Wrap(dispatch_invert(self_));
   END_HANDLE_TH_ERRORS
@@ -1071,7 +1071,7 @@ static PyObject * THPVariable_type(PyObject* self, PyObject* args, PyObject* kwa
   } else if (THPDtype_Check(obj)) {
     is_dtype = true;
   } else {
-    C10_THROW_ERROR(TypeError, "dtype must be a type, str, or dtype object");
+    TORCH_CHECK_TYPE(false, "dtype must be a type, str, or dtype object");
   }
   ScalarType scalar_type;
   Device device = self_.device();
