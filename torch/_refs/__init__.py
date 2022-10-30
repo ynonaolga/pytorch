@@ -2733,8 +2733,31 @@ def flipud(a: TensorLikeType) -> TensorLikeType:
 
 
 # CompositeImplicitAutograd - don't register decomp
-def narrow(a: TensorLikeType, dim: int, start: int, length: int) -> TensorLikeType:
+def narrow(
+    a: TensorLikeType, dim: int, start: Union[int, TensorLikeType], length: int
+) -> TensorLikeType:
+    # Support Tensor overload that was added for XLA:
+    # https://github.com/pytorch/pytorch/issues/31558
+    if isinstance(start, TensorLike):
+        check(
+            start.dim() == 0 and utils.is_integer_dtype(start.dtype),
+            lambda: "start must be an 0-dim integral Tensor.",
+        )
+        start = start.item()  # type: ignore[assignment]
+    check(a.dim() > 0, lambda: "narrow() cannot be applied to a 0-dim tensor.")
+    check(length >= 0, lambda: "narrow() doesn't support negative length.")
     dim = utils.canonicalize_dim(a.ndim, dim)
+    cur_length = a.size(dim)
+    # Start being the end is usually invalid since it's out of bounds. So it's
+    # not allowed by canonicalize_dim. But for narrow it's valid as long as
+    # the length is 0, which is handled by the check below.
+    if start != cur_length:
+        # Negative start means indexing from the end of dim.
+        start = utils.canonicalize_dim(cur_length, start)  # type: ignore[arg-type]
+    check(
+        length >= 0 and start <= cur_length - length,  # type: ignore[arg-type]
+        lambda: f"start ({start}) + length ({length}) exceeds dimension size ({cur_length}).",
+    )
     return prims.slice_in_dim(a, start, start + length, axis=dim)
 
 
