@@ -159,8 +159,6 @@ def main() -> None:
         # No PR number, no tag, we can just return the test matrix as it is
         filtered_test_matrix = test_matrix
 
-    for entry in test_matrix.get('include', []):
-        entry["leak-check"] = "mem_leak_check"
 
     # Set the filtered test matrix as the output
     set_output("test-matrix", json.dumps(filtered_test_matrix))
