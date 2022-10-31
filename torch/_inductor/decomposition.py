@@ -177,7 +177,7 @@ def special_erf(x):
     p = 0.3275911
 
     if x.type == torch.bool:
-        x = torch.gt(x)
+        x = torch.gt(x, 0).int()
 
     sign = torch.sign(x)
     x = torch.abs(x)
