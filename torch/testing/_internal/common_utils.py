@@ -769,12 +769,9 @@ def run_tests(argv=UNITTEST_ARGS):
                             c.cell_contents = f"skip: {reason}"
 
             test_report_path = get_report_path()
-            verbose = '--verbose' in argv or '-v' in argv
-            if verbose:
-                print(f'Test results will be stored in {test_report_path}')
             unittest.main(argv=argv, testRunner=xmlrunner.XMLTestRunner(
                 output=test_report_path,
-                verbosity=2 if verbose else 1,
+                verbosity=1,
                 resultclass=XMLTestResultVerbose), exit=False)
         elif REPEAT_COUNT > 1:
             for _ in range(REPEAT_COUNT):
