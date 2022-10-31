@@ -160,7 +160,7 @@ def main() -> None:
         filtered_test_matrix = test_matrix
 
     for entry in test_matrix.get('include', []):
-        entry["leak-check"] = "1"
+        entry["leak-check"] = "mem_leak_check"
 
     # Set the filtered test matrix as the output
     set_output("test-matrix", json.dumps(filtered_test_matrix))
