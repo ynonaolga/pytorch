@@ -1,6 +1,7 @@
 import contextlib
 import dataclasses
 import functools
+import os
 from pathlib import Path
 from typing import Dict, List
 
@@ -10,10 +11,12 @@ import torch
 from torch._prims_common import is_float_dtype
 
 from .. import codecache, config
+from ..codecache import cache_dir, code_hash, cpp_compile_command
 from ..utils import sympy_product, sympy_symbol
 from ..virtualized import ops, V
 from .common import (
     BracesBuffer,
+    CppWrapperKernelArgs,
     DeferredIndentedBuffer,
     ExprPrinter,
     IndentedBuffer,
@@ -34,6 +37,20 @@ DTYPE_TO_CPP = {
     torch.bool: "bool",
     torch.bfloat16: "bfloat16",
 }
+
+DTYPE_TO_ATEN = {
+    torch.float32: "at::ScalarType::Float",
+    torch.float64: "at::ScalarType::Double",
+    torch.float16: "at::ScalarType::Half",
+    torch.int64: "at::ScalarType::Long",
+    torch.int32: "at::ScalarType::Int",
+    torch.int16: "at::ScalarType::Short",
+    torch.int8: "at::ScalarType::Char",
+    torch.uint8: "at::ScalarType::Byte",
+    torch.bool: "at::ScalarType::Bool",
+    torch.bfloat16: "at::ScalarType::BFloat16",
+}
+
 INDEX_TYPE = "long"
 
 RTYPE_TO_CPP = {
@@ -512,10 +529,18 @@ class CppKernel(Kernel):
 class CppScheduling:
     def __init__(self, scheduler):
         self.scheduler = scheduler
-        self.kernel_group = KernelGroup()
+        self.get_kernel_group()
 
     def group_fn(self, sizes):
         return tuple(tuple(map(V.graph.sizevars.simplify, s)) for s in sizes)
+
+    def get_kernel_group(self):
+        from .wrapper import CppWrapperCodeGen
+
+        if isinstance(V.graph.wrapper_code, CppWrapperCodeGen):
+            self.kernel_group = CppWrapperKernelGroup()
+        else:
+            self.kernel_group = KernelGroup()
 
     @staticmethod
     def can_fuse_horizontal(node1, node2):
@@ -567,7 +592,7 @@ class CppScheduling:
 
     def flush(self):
         self.kernel_group.codegen_define_and_call(V.graph.wrapper_code)
-        self.kernel_group = KernelGroup()
+        self.get_kernel_group()
 
 
 class KernelGroup:
@@ -589,13 +614,21 @@ class KernelGroup:
         ws = self.ws
         new_kernel.codegen_loops(code, ws)
 
+    def generate_kernel_calling_code(
+        self, wrapper, kernel_name, call_args, code=None, arg_types=None
+    ):
+        wrapper.writeline(
+            "{}({})".format(kernel_name, ", ".join(call_args)),
+        )
+
     def codegen_define_and_call(self, wrapper):
         self.stack.close()
         if self.count == 0:
             return
 
-        arg_defs, call_args = self.args.cpp_argdefs()
+        arg_defs, call_args, arg_types = self.args.cpp_argdefs()
         arg_defs = ",\n".ljust(25).join(arg_defs)
+        arg_types = ",".join(arg_types)
         code = BracesBuffer()
         code.writelines([cpp_prefix(), "" f'extern "C" void kernel({arg_defs})'])
         with code.indent():
@@ -616,8 +649,44 @@ class KernelGroup:
         wrapper.define_kernel(kernel_name, codecache_str)
 
         # generate the code to call this
+        self.generate_kernel_calling_code(
+            wrapper, kernel_name, call_args, code, arg_types
+        )
+
+
+class CppWrapperKernelGroup(KernelGroup):
+    def __init__(self):
+        super().__init__()
+        self.args = CppWrapperKernelArgs()
+
+    def get_kernel_path(self, code):
+        # TODO: this duplicates with CodeCache logic
+        ext = "so"
+        extra = cpp_compile_command("i", "o")
+        # \n is required to match with the CodeCache behavior
+        source_code = "\n" + code.getvalue()
+        basename = code_hash(source_code + extra)
+        subdir = os.path.join(cache_dir(), basename[1:3])
+        kernel_path = os.path.join(subdir, f"{basename}.{ext}")
+        return kernel_path
+
+    def generate_kernel_calling_code(
+        self, wrapper, kernel_name, call_args, code, arg_types
+    ):
+        kernel_path = self.get_kernel_path(code)
+
         wrapper.writeline(
-            "{}({})".format(kernel_name, ", ".join(call_args)),
+            f'auto {kernel_name}_lib = dlopen("{kernel_path}", RTLD_NOW);'
+        )
+        wrapper.writeline(f"assert({kernel_name}_lib != nullptr);")
+        wrapper.writeline(f"void (*{kernel_name})({arg_types});")
+        wrapper.writeline(
+            f'*(void **) (&{kernel_name}) = dlsym({kernel_name}_lib, "kernel");'
+        )
+
+        # generate the code to call this
+        wrapper.writeline(
+            "{}({});".format(kernel_name, ", ".join(call_args)),
         )
 
 
