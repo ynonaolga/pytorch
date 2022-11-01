@@ -16927,11 +16927,13 @@ python_ref_db = [
     ElementwiseUnaryPythonRefInfo(
         "_refs.nn.functional.celu",
         torch_opinfo_name="nn.functional.celu",
+        supports_out=True,
     ),
     ElementwiseUnaryPythonRefInfo(
         "_refs.nn.functional.threshold",
         torch_opinfo_name="nn.functional.threshold",
         supports_nvfuser=False,
+        supports_out=True,
     ),
     PythonRefInfo(
         "_refs.nn.functional.dropout",
@@ -16966,11 +16968,13 @@ python_ref_db = [
     ElementwiseUnaryPythonRefInfo(
         "_refs.nn.functional.elu",
         torch_opinfo_name="nn.functional.elu",
+        supports_out=True,
     ),
     ElementwiseUnaryPythonRefInfo(
         "_refs.nn.functional.hardtanh",
         torch_opinfo_name="nn.functional.hardtanh",
         supports_nvfuser=False,
+        supports_out=True,
     ),
     PythonRefInfo(  # TODO: Port this to an UnaryOpInfo
         "_refs.nn.functional.gelu",
@@ -17009,6 +17013,7 @@ python_ref_db = [
     PythonRefInfo(
         "_refs.nn.functional.leaky_relu",
         torch_opinfo_name="nn.functional.leaky_relu",
+        supports_out=True,
     ),
     PythonRefInfo(
         "_refs.nn.functional.log_softmax",
@@ -17034,18 +17039,22 @@ python_ref_db = [
         "_refs.nn.functional.relu",
         torch_opinfo_name="nn.functional.relu",
         supports_nvfuser=False,
+        supports_out=True,
     ),
     ElementwiseUnaryPythonRefInfo(
         "_refs.nn.functional.relu6",
         torch_opinfo_name="nn.functional.relu6",
+        supports_out=True,
     ),
     ElementwiseUnaryPythonRefInfo(
         "_refs.nn.functional.mish",
         torch_opinfo_name="nn.functional.mish",
+        supports_out=True,
     ),
     ElementwiseUnaryPythonRefInfo(
         "_refs.nn.functional.selu",
         torch_opinfo_name="nn.functional.selu",
+        supports_out=True,
     ),
     PythonRefInfo(
         "_refs.nn.functional.softmax",
