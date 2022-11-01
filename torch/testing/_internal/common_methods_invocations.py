@@ -274,14 +274,26 @@ def sample_inputs_as_strided_scatter(op_info, device, dtype, requires_grad, **kw
         ((1,), (1,), (1,), 0),
         ((3, 3), (2, 2), (1, 2), 0),
         ((3, 3), (2, 2), (1, 2), 1),
-        ((16,), (2, 2, 2, 2), (1, 1, 1, 1), 0),
-        ((16,), (2, 1, 1, 2), (1, 7, 7, 1), 0),
+        ((3, 3), (2, 2), (2, 1), 0),
+        ((16,), (2, 2, 2, 2), (8, 4, 2, 1), 0),
+        ((16,), (2, 1, 1, 2), (1, 2, 4, 8), 0),
     ]
 
     for input_shape, output_shape, stride, storage_offset in test_cases:
         input_t = make_arg(input_shape)
         input_src = make_arg(output_shape)
         yield SampleInput(input_t, input_src, output_shape, stride, storage_offset=storage_offset)
+
+def error_inputs_as_strided_scatter(op_info, device, **kwargs):
+    make_arg = partial(make_tensor, device=device, dtype=torch.float32, requires_grad=False)
+
+    input_t = make_arg([4, 4])
+    input_src = make_arg([2, 2])
+    yield ErrorInput(
+        SampleInput(input_t, input_src, [2, 2], [200, 200], storage_offset=0),
+        error_regex="itemsize 4 requiring a storage size of 1604 are out of bounds for storage of size 64"
+    )
+
 
 def sample_inputs_combinations(op_info, device, dtype, requires_grad, **kwargs):
     inputs = (
@@ -10397,6 +10409,7 @@ op_db: List[OpInfo] = [
            # vmap does not support inplace views
            check_inplace_batched_forward_grad=False,
            sample_inputs_func=sample_inputs_as_strided_scatter,
+           error_inputs_func=error_inputs_as_strided_scatter,
            skips=(
                DecorateInfo(unittest.skip('Works only for CPU complex64'), 'TestMathBits', 'test_conj_view'),
                DecorateInfo(unittest.skip('Works for float64, fails for everything else'), 'TestMathBits', 'test_neg_view'),
@@ -10405,14 +10418,12 @@ op_db: List[OpInfo] = [
                DecorateInfo(unittest.skip('Only fails for LAZY, passes on everything else'), 'TestCompositeCompliance', 'test_backward'),  # noqa: B950
                DecorateInfo(unittest.skip('Passes on complex64 and float32 only'), 'TestJit', 'test_variant_consistency_jit'),
                DecorateInfo(unittest.skip('Fails on cuda + rocm'), 'TestCommon', 'test_complex_half_reference_testing'),
+               # https://github.com/pytorch/pytorch/issues/88105
                DecorateInfo(unittest.expectedFailure, 'TestGradients', 'test_fn_grad'),
-               DecorateInfo(unittest.expectedFailure, 'TestGradients', 'test_fn_gradgrad'),
+               DecorateInfo(unittest.skip("This fails intermittently"), 'TestGradients', 'test_fn_gradgrad'),
                DecorateInfo(unittest.skip('Passes on complex128 and float64 only'), 'TestGradients', 'test_fn_fwgrad_bwgrad'),
                # AssertionError: Tensor-likes are not close! (new_empty_strided.default)
-               DecorateInfo(unittest.skip("Expected: new_empty_strided is not comparable"), 'TestDecomp', 'test_comprehensive'),
-               DecorateInfo(
-                   unittest.skip("Some stride values write multiple values to the same location e.g. (1,1,1,1)"),
-                   'TestCommon', 'test_compare_cpu'),)),
+               DecorateInfo(unittest.skip("Expected: new_empty_strided is not comparable"), 'TestDecomp', 'test_comprehensive'),)),
     OpInfo('native_layer_norm',
            aten_name='native_layer_norm',
            ref=reference_native_layer_norm,
