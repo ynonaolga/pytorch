@@ -4311,14 +4311,14 @@ def sample_inputs_narrow_copy(op_info, device, dtype, requires_grad, **kwargs):
         yield SampleInput(tensor, args=args)
 
 def sample_inputs_view_copy(op_info, device, dtype, requires_grad, **kwargs):
-    shapes_and_args = (
+    shapes = (
         ((S, S, S), [S * S, S]),
     )
 
-    for shape, size in shapes_and_args:
+    for shape, new_shape in shapes:
         tensor = make_tensor(shape, dtype=dtype, device=device, low=None, high=None,
                              requires_grad=requires_grad)
-        yield SampleInput(tensor, size)
+        yield SampleInput(tensor, new_shape)
 
 
 def sample_inputs_narrow(op_info, device, dtype, requires_grad, **kwargs):
