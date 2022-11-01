@@ -146,11 +146,38 @@ def is_gcc():
     return re.search(r"(gcc|g\+\+)", cpp_compiler())
 
 
+@functools.lru_cache(1)
+def valid_vec_isa():
+    # TODO: Add ARM Vec here.
+    # Tuple(isa, number of float element)
+    vec_isa_info = [("avx512", 16), ("avx2", 8)]
+
+    # TODO: Add windows support
+    if sys.platform != "linux":
+        return ""
+
+    if config.cpp.simdlen is None or config.cpp.simdlen <= 1:
+        return ""
+
+    with open("/proc/cpuinfo") as _cpu_info:
+        cpu_info_content = _cpu_info.read()
+        for isa, elt_num in vec_isa_info:
+            if isa in cpu_info_content and config.cpp.simdlen == elt_num:
+                return isa
+
+        return ""
+
+
 def cpp_compile_command(input, output, include_pytorch=False):
-    if include_pytorch:
+    if include_pytorch or valid_vec_isa():
         ipaths = cpp_extension.include_paths() + [sysconfig.get_path("include")]
         lpaths = cpp_extension.library_paths() + [sysconfig.get_config_var("LIBDIR")]
         libs = ["c10", "torch", "torch_cpu", "torch_python", "gomp"]
+        macros = ""
+        if valid_vec_isa() == "avx512":
+            macros = " " + "-DCPU_CAPABILITY_AVX512"
+        elif valid_vec_isa() == "avx2":
+            macros = " " + "-DCPU_CAPABILITY_AVX2"
     else:
         # Note - this is effectively a header only inclusion. Usage of some header files may result in
         # symbol not found, if those header files require a library.
@@ -159,15 +186,17 @@ def cpp_compile_command(input, output, include_pytorch=False):
         ipaths = cpp_extension.include_paths() + [sysconfig.get_path("include")]
         lpaths = []
         libs = ["gomp"]
+        macros = ""
     ipaths = " ".join(["-I" + p for p in ipaths])
     lpaths = " ".join(["-L" + p for p in lpaths])
     libs = " ".join(["-l" + p for p in libs])
+
     return re.sub(
         r"[ \n]+",
         " ",
         f"""
             {cpp_compiler()} -shared -fPIC -Wall -std=c++14 -Wno-unused-variable
-            {ipaths} {lpaths} {libs}
+            {ipaths} {lpaths} {libs} {macros}
             -march=native -O3 -ffast-math -fno-finite-math-only -fopenmp
             -o{output} {input}
         """,
