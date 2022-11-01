@@ -3256,22 +3256,28 @@ def index_fill(
 def index_fill_(
     x: TensorLike, dim: int, index: TensorLike, value: Union[NumberType, TensorLike]
 ):
+    utils.check(
+        index.ndim <= 1,
+        lambda: f"Index should have dimension 1 or 0 (got {index.ndim})",
+    )
     if isinstance(value, TensorLike):
         utils.check(
             value.ndim == 0,
             lambda: "Only supports 0-dimensional value tensor. "  # type: ignore[union-attr]
             f"Got a tensor with {value.ndim} dimensions.",
         )  # type: ignore[arg-type]
-        return x.clone().index_copy_(dim, index, value)
-    dim = utils.canonicalize_dims(x.ndim, dim)
-    utils.check(
-        index.ndim <= 1,
-        lambda: f"Index should have dimension 1 or 0 (got {index.ndim})",
-    )
-    idx = (slice(None),) * dim + (index,)
-    # Treat scalars as elements of \R^1
+    else:
+        value = torch.scalar_tensor(
+            value, dtype=x.dtype, layout=x.layout, device=x.device  # type: ignore[arg-type]
+        )
+
+    # index_copy has some innecessary preconditions when x is a scalar. We do this to work through them
     y = x.unsqueeze(0) if x.ndim == 0 else x
-    y[idx] = value  # type: ignore[assignment]
+    # index_copy does not broadcast on value so we have to do it manually
+    shape = list(y.shape)
+    shape[dim] = index.numel()
+    value = value.expand(shape)
+    y.index_copy_(dim, index, value)
     return x
 
 
@@ -3299,12 +3305,13 @@ def index_select(x: TensorLike, dim: int, index: TensorLike):
         index.ndim <= 1,
         lambda: f"Index should have dimension 1 or 0 (got {index.ndim})",
     )
-    # Treat scalars as elements of \R^1
+    if index.ndim == 0:
+        index = index.unsqueeze(0)
     if x.ndim == 0:
-        # we cannot write `x.unsqueeze(0)[index].squeeze(0).clone()`
-        # as tensor[index] will trigger index.item() if index is a 0-dim tensor
-        # and .item() cannot be symbolically traced with FakeTensor.
-        return torch.ops.aten.index(x.unsqueeze(0), [index]).squeeze(0).clone()
+        # Treat scalars as elements of \R^1
+        # We cannot use x[idx] here as it accesses item() (??), hence this awkward construction
+        return torch.empty_like(x).index_copy(0, index, x.expand_as(index))
+
     idx = (slice(None),) * dim + (index,)
     return x[idx]
 
@@ -4459,10 +4466,9 @@ def randn(
     device: Optional[torch.device] = None,
     layout: Optional[torch.layout] = None,
     requires_grad: bool = False,
-    pin_memory: Optional[bool] = None,
+    pin_memory: bool = False,
 ) -> TensorLikeType:
-
-    check(pin_memory is None, lambda: "pin_memory parameter is not supported!")
+    utils.check_pin_memory(pin_memory)
 
     shape_ = utils.extract_shape_from_varargs(shape)
 
@@ -4522,9 +4528,7 @@ def uniform(
     return prims.uniform(shape, low=low, high=high, dtype=dtype, device=device)
 
 
-@register_decomposition(
-    [torch.ops.aten.masked_fill.Scalar, torch.ops.aten.masked_fill.Tensor]
-)
+@register_decomposition(torch.ops.aten.masked_fill)
 def masked_fill(a: TensorLikeType, mask: TensorLikeType, value: TensorOrNumberLikeType):
     python_type = utils.dtype_to_type(a.dtype)
     if isinstance(value, Number):
